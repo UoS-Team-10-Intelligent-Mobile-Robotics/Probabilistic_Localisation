@@ -30,8 +30,17 @@ from model_feeg6043 import (
     RangeAngleKinematics,
     TrajectoryGenerate,
     feedback_control,
+    extended_kalman_filter_predict,
+    extended_kalman_filter_update,
 )
-from math_feeg6043 import Vector, l2m, Inverse, HomogeneousTransformation
+from math_feeg6043 import (
+    Vector,
+    Matrix,
+    Identity,
+    l2m,
+    Inverse,
+    HomogeneousTransformation,
+)
 
 
 class LaptopPilot:
@@ -90,6 +99,45 @@ class LaptopPilot:
         self.est_pose_yaw_rad = 0
         self.initialise_pose = True
 
+        # state modelling parameters
+        self.N = 0
+        self.E = 1
+        self.G = 2
+        self.DOTX = 3
+        self.DOTG = 4
+
+        # process/motion model noise
+        self.R = Identity(5)
+        self.R[self.N, self.N] = 0.0**2
+        self.R[self.E, self.E] = 0.0**2
+        self.R[self.G, self.G] = np.deg2rad(0.0) ** 2
+        self.R[self.DOTX, self.DOTX] = 0.01**2
+        self.R[self.DOTG, self.DOTG] = np.deg2rad(0.05) ** 2
+
+        # measurement noise
+        self.NE_std = 1
+        self.G_std = np.deg2rad(1)
+
+        # state
+        self.init_state = Vector(5)
+        self.init_state[self.N] = 0
+        self.init_state[self.E] = 0
+        self.init_state[self.G] = 0
+        self.init_state[self.DOTX] = 0
+        self.init_state[self.DOTG] = 0
+
+        self.state = None
+
+        # covariance
+        self.init_covariance = Identity(5)
+        self.init_covariance[self.N, self.N] = self.NE_std**2
+        self.init_covariance[self.E, self.E] = self.NE_std**2
+        self.init_covariance[self.G, self.G] = self.G_std**2
+        self.init_covariance[self.DOTX, self.DOTX] = 0.0**2
+        self.init_covariance[self.DOTG, self.DOTG] = np.deg2rad(0) ** 2
+
+        self.covariance = None
+
         # modelling parameters
         wheel_distance = 0.0815  # measure this
         wheel_diameter = 0.065  # measure this
@@ -126,7 +174,7 @@ class LaptopPilot:
 
         # control gains
         self.tau_s = 0.2  # s to remove along track error
-        self.L = 0.075  # m distance to remove normal and angular error
+        self.L = 0.25  # m distance to remove normal and angular error
         self.v_max = 0.4  # fastest the robot can go
         self.w_max = np.deg2rad(60)  # fastest the robot can turn
 
@@ -245,6 +293,7 @@ class LaptopPilot:
         pose_msg.pose.orientation = quat
         return pose_msg
 
+    # Planning and Control
     def generate_trajectory(self):
         # pick waypoints as current pose relative or absolute northings and eastings
         if self.relative_path == True:
@@ -266,6 +315,68 @@ class LaptopPilot:
         )  # velocity and acceleration
         self.path.turning_arcs(self.turning_radius)  # turning radius
         self.path.wp_id = 0  # initialises the next waypoint
+
+    # Extended Kalman Filter
+    def motion_model(self, state, u, dt):
+
+        N_k_1 = state[self.N]
+        E_k_1 = state[self.E]
+        G_k_1 = state[self.G]
+        DOTX_k_1 = state[self.DOTX]
+        DOTG_k_1 = state[self.DOTG]
+
+        p = Vector(3)
+        p[0] = N_k_1
+        p[1] = E_k_1
+        p[2] = G_k_1
+
+        # note rigid_body_kinematics already handles the exception dynamics of w=0
+        p = rigid_body_kinematics(p, u, dt)
+
+        # vertically joins two vectors together
+        state = np.vstack((p, u))
+
+        N_k = state[self.N]
+        E_k = state[self.E]
+        G_k = state[self.G]
+        DOTX_k = state[self.DOTX]
+        DOTG_k = state[self.DOTG]
+
+        # Compute its jacobian
+        F = Identity(5)
+
+        if (
+            abs(DOTG_k) < 1e-2
+        ):  # caters for zero angular rate, but uses a threshold to avoid numerical instability
+            F[self.N, self.G] = -DOTX_k * dt * np.sin(G_k_1)
+            F[self.N, self.DOTX] = dt * np.cos(G_k_1)
+            F[self.E, self.G] = DOTX_k * dt * np.cos(G_k_1)
+            F[self.E, self.DOTX] = dt * np.sin(G_k_1)
+            F[self.G, self.DOTG] = dt
+
+        else:
+            F[self.N, self.G] = (DOTX_k / DOTG_k) * (np.cos(G_k) - np.cos(G_k_1))
+            F[self.N, self.DOTX] = (1 / DOTG_k) * (np.sin(G_k) - np.sin(G_k_1))
+            F[self.N, self.DOTG] = (DOTX_k / (DOTG_k**2)) * (
+                np.sin(G_k_1) - np.sin(G_k)
+            ) + (DOTX_k * dt / DOTG_k) * np.cos(G_k)
+            F[self.E, self.G] = (DOTX_k / DOTG_k) * (np.sin(G_k) - np.sin(G_k_1))
+            F[self.E, self.DOTX] = (1 / DOTG_k) * (np.cos(G_k_1) - np.cos(G_k))
+            F[self.E, self.DOTG] = (DOTX_k / (DOTG_k**2)) * (
+                np.cos(G_k) - np.cos(G_k_1)
+            ) + (DOTX_k * dt / DOTG_k) * np.sin(G_k)
+            F[self.G, self.DOTG] = dt
+
+        return state, F
+
+    def measurement_update(self, x):
+        z = Vector(5)
+        z[self.N : self.DOTX] = x[self.N : self.DOTX]
+        H = Matrix(5, 5)
+        H[self.N, self.N] = 1
+        H[self.E, self.E] = 1
+        H[self.G, self.G] = 1
+        return z, H
 
     def run(self, time_to_run=-1):
         self.start_time = datetime.utcnow().timestamp()
@@ -327,6 +438,8 @@ class LaptopPilot:
                 # path and tragectory are initialised
                 self.initialise_pose = False
                 self.generate_trajectory()
+                self.state = self.init_state
+                self.covariance = self.init_covariance
 
         # > Think < #
         ################################################################################
@@ -350,15 +463,67 @@ class LaptopPilot:
             self.t += dt  # add to the elapsed time
             self.t_prev = t_now  # update the previous timestep for the next loop
 
+            self.state[self.N] = self.est_pose_northings_m
+            self.state[self.E] = self.est_pose_eastings_m
+            self.state[self.G] = self.est_pose_yaw_rad
+
+            if dt != 0:
+                self.state, self.covariance = extended_kalman_filter_predict(
+                    self.state, self.covariance, u, self.motion_model, self.R, dt
+                )
+                print(
+                    "Motion model predictions\n########################\nN: ",
+                    self.state[self.N],
+                    "; E: ",
+                    self.state[self.E],
+                    "; G: ",
+                    self.state[self.G],
+                    "; v: ",
+                    self.state[self.DOTX],
+                    "; w: ",
+                    self.state[self.DOTG],
+                )
+
+            if self.t - self.measured_pose_timestamp_s <= dt:
+                z = Vector(5)
+                Q = Identity(5)
+
+                h = self.measurement_update
+                z[self.N] = self.measured_pose_northings_m
+                z[self.E] = self.measured_pose_eastings_m
+                z[self.G] = self.measured_pose_yaw_rad
+
+                Q[self.N, self.N] = self.NE_std**2
+                Q[self.E, self.E] = self.NE_std**2
+                Q[self.G, self.G] = self.G_std**2
+
+                self.state, self.covariance = extended_kalman_filter_update(
+                    self.state, self.covariance, z, h, Q, wrap_index=self.G
+                )
+                print(
+                    "Measurement update\n##################\nMeasured N: ",
+                    z[self.N],
+                    "; Measured E: ",
+                    z[self.E],
+                    "; Measured G: ",
+                    z[self.G],
+                    "\n------------------\nN: ",
+                    self.state[self.N],
+                    "; E: ",
+                    self.state[self.E],
+                    "; G: ",
+                    self.state[self.G],
+                    "; v: ",
+                    self.state[self.DOTX],
+                    "; w: ",
+                    self.state[self.DOTG],
+                )
+
             # take current pose estimate and update by twist
             p_robot = Vector(3)
-            p_robot[0, 0] = self.est_pose_northings_m
-            p_robot[1, 0] = self.est_pose_eastings_m
-            p_robot[2, 0] = self.est_pose_yaw_rad
-
-            p_robot = rigid_body_kinematics(p_robot, u, dt)
-            p_robot[2] = p_robot[2] % (2 * np.pi)  # deal with angle wrapping
-            # print("Estimated northings: ", p_robot[0,0], "m; Estimated eastings: ", p_robot[1, 0], "m; Estimated yaw:", p_robot[2,0], "rad;")
+            p_robot[0, 0] = self.state[self.N]
+            p_robot[1, 0] = self.state[self.E]
+            p_robot[2, 0] = self.state[self.G]
 
             # update for show_laptop.py
             self.est_pose_northings_m = p_robot[0, 0]
@@ -441,6 +606,9 @@ class LaptopPilot:
                 u[1] = self.w_max
             if u[1] < -self.w_max:
                 u[1] = -self.w_max
+
+            self.state[self.DOTX] = u[0]
+            self.state[self.DOTG] = u[1]
 
             # update control gains for the next timestep using current velocity, which is stored in u
             self.k_n = 2 * u[0] / (self.L**2)
