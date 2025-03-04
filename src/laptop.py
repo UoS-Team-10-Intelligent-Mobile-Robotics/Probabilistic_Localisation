@@ -108,15 +108,15 @@ class LaptopPilot:
 
         # process/motion model noise
         self.R = Identity(5)
-        self.R[self.N, self.N] = 0.0**2
-        self.R[self.E, self.E] = 0.0**2
-        self.R[self.G, self.G] = np.deg2rad(0.0) ** 2
-        self.R[self.DOTX, self.DOTX] = 0.01**2
-        self.R[self.DOTG, self.DOTG] = np.deg2rad(0.05) ** 2
+        self.R[self.N, self.N] = 0.012**2
+        self.R[self.E, self.E] = 0.012**2
+        self.R[self.G, self.G] = np.deg2rad(0.012) ** 2
+        self.R[self.DOTX, self.DOTX] = 0.012**2
+        self.R[self.DOTG, self.DOTG] = np.deg2rad(0.012) ** 2
 
         # measurement noise
-        self.NE_std = 1
-        self.G_std = np.deg2rad(1)
+        self.NE_std = 0.05
+        self.G_std = np.deg2rad(0.05)
 
         # state
         self.init_state = Vector(5)
@@ -175,8 +175,8 @@ class LaptopPilot:
         # control gains
         self.tau_s = 0.2  # s to remove along track error
         self.L = 0.25  # m distance to remove normal and angular error
-        self.v_max = 0.4  # fastest the robot can go
-        self.w_max = np.deg2rad(60)  # fastest the robot can turn
+        self.v_max = 0.2  # fastest the robot can go
+        self.w_max = np.deg2rad(30)  # fastest the robot can turn
 
         self.k_s = 1 / self.tau_s
         self.k_n = 0.1
