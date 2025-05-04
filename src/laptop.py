@@ -233,7 +233,7 @@ class LaptopPilot:
         self.lidar_data[:, 0] = (
             msg.ranges
         )  # use ranges as a placeholder, workout northings in Task 4
-        self.lidar_data[:, 0] = (
+        self.lidar_data[:, 1] = (
             msg.angles
         )  # use angles as a placeholder, workout eastings in Task 4
         self.datalog.log(msg, topic_name="/lidar")
