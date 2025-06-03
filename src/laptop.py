@@ -108,15 +108,15 @@ class LaptopPilot:
 
         # process/motion model noise
         self.R = Identity(5)
-        self.R[self.N, self.N] = 0.012**2
-        self.R[self.E, self.E] = 0.012**2
-        self.R[self.G, self.G] = np.deg2rad(0.012) ** 2
-        self.R[self.DOTX, self.DOTX] = 0.012**2
-        self.R[self.DOTG, self.DOTG] = np.deg2rad(0.012) ** 2
+        self.R[self.N, self.N] = 0.001**2
+        self.R[self.E, self.E] = 0.001**2
+        self.R[self.G, self.G] = np.deg2rad(0.001) ** 2
+        self.R[self.DOTX, self.DOTX] = 0.002**2
+        self.R[self.DOTG, self.DOTG] = np.deg2rad(0.002) ** 2
 
         # measurement noise
-        self.NE_std = 0.05
-        self.G_std = np.deg2rad(0.05)
+        self.NE_std = 0.001
+        self.G_std = np.deg2rad(0.001)
 
         # state
         self.init_state = Vector(5)
@@ -173,10 +173,10 @@ class LaptopPilot:
         self.acceptance_radius = 0.1  # m
 
         # control gains
-        self.tau_s = 0.2  # s to remove along track error
-        self.L = 0.25  # m distance to remove normal and angular error
-        self.v_max = 0.2  # fastest the robot can go
-        self.w_max = np.deg2rad(30)  # fastest the robot can turn
+        self.tau_s = 0.1  # s to remove along track error
+        self.L = 0.075  # m distance to remove normal and angular error
+        self.v_max = 0.05  # fastest the robot can go
+        self.w_max = np.deg2rad(25)  # fastest the robot can turn
 
         self.k_s = 1 / self.tau_s
         self.k_n = 0.1
@@ -557,10 +557,6 @@ class LaptopPilot:
             )  # sample the path at the current elapsetime (i.e. seconds from start of motion modelling)
             # print("Reference northings: ", p_ref[0, 0], "m; Reference eastings: ", p_ref[1, 0], "m; Reference yaw:", p_ref[2, 0], "rad;")
             # print("Reference velocity: ", u_ref[0], "m/s; Reference angular rate: ", u_ref[1], "rad/s;")
-
-            self.est_pose_northings_m = p_ref[0, 0]
-            self.est_pose_eastings_m = p_ref[1, 0]
-            self.est_pose_yaw_rad = p_ref[2, 0]
 
             # feedback control: get pose change to desired trajectory from body
             dp = (
